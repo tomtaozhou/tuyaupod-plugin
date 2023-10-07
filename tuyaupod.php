@@ -1,10 +1,26 @@
 <?php
 /*
-Plugin Name: Tuya to UPOD Post
-Description: Fetch data from Tuya and post it to UPOD.
+Plugin Name: Tuya CO2 to Post
+Description: Fetch CO2 data from Tuya devices and post it to a specified WordPress post.
 Version: 1.0
-Author: Tao Zhou
+Author: Your Name
 */
+
+// 创建自定义时间间隔
+function tuya_add_cron_intervals($schedules) {
+    $schedules['5_minutes'] = array(
+        'interval' => 300, // 5 minutes in seconds
+        'display'  => 'Every 5 Minutes',
+    );
+
+    $schedules['30_minutes'] = array(
+        'interval' => 1800, // 30 minutes in seconds
+        'display'  => 'Every 30 Minutes',
+    );
+
+    return $schedules;
+}
+add_filter('cron_schedules', 'tuya_add_cron_intervals');
 
 // 添加设置菜单
 function tuya_to_post_menu() {
@@ -20,67 +36,127 @@ add_action('admin_menu', 'tuya_to_post_menu');
 
 // 设置页面内容
 function tuya_to_post_settings_page() {
-    if ($_POST['tuya_endpoint'] && $_POST['tuya_token']) {
-        update_option('tuya_endpoint', $_POST['tuya_endpoint']);
-        update_option('tuya_token', $_POST['tuya_token']);
-        echo '<div class="updated"><p>Settings saved.</p></div>';
+    // Handle adding a new device
+    if ($_POST['tuya_new_device_endpoint'] && $_POST['tuya_new_device_token']) {
+        $devices = get_option('tuya_devices', array());
+        $devices[] = array(
+            'endpoint' => $_POST['tuya_new_device_endpoint'],
+            'token' => $_POST['tuya_new_device_token']
+        );
+        update_option('tuya_devices', $devices);
     }
 
-    $tuya_endpoint = get_option('tuya_endpoint', '');
-    $tuya_token = get_option('tuya_token', '');
+    // Handle deleting a device
+    if (isset($_POST['delete_device_index'])) {
+        $devices = get_option('tuya_devices', array());
+        unset($devices[intval($_POST['delete_device_index'])]);
+        $devices = array_values($devices);  // Reindex the array
+        update_option('tuya_devices', $devices);
+    }
+
+    // Handle setting the target post
+    if ($_POST['target_post_id']) {
+        update_option('tuya_target_post_id', intval($_POST['target_post_id']));
+    }
+
+    // Handle setting the fetch frequency
+    if ($_POST['fetch_frequency']) {
+        update_option('tuya_fetch_frequency', $_POST['fetch_frequency']);
+        // Reschedule the event with the new frequency
+        wp_clear_scheduled_hook('fetch_tuya_and_update_post');
+        wp_schedule_event(time(), $_POST['fetch_frequency'], 'fetch_tuya_and_update_post');
+    }
+
+    $devices = get_option('tuya_devices', array());
+    $target_post_id = get_option('tuya_target_post_id', 0);
+    $fetch_frequency = get_option('tuya_fetch_frequency', 'hourly');
     ?>
     <div class="wrap">
         <h2>Tuya CO2 to Post Settings</h2>
+
+        <h3>Target Post</h3>
+        <form method="post" action="">
+            <label for="target_post_id">Post to update with CO2 data:</label>
+            <?php wp_dropdown_pages(array('name' => 'target_post_id', 'selected' => $target_post_id)); ?>
+            <?php submit_button('Set Target Post'); ?>
+        </form>
+
+        <h3>Fetch Frequency</h3>
+        <form method="post" action="">
+            <label for="fetch_frequency">How often should the data be fetched:</label>
+            <select name="fetch_frequency">
+                <option value="5_minutes" <?php selected($fetch_frequency, '5_minutes'); ?>>Every 5 Minutes</option>
+                <option value="30_minutes" <?php selected($fetch_frequency, '30_minutes'); ?>>Every 30 Minutes</option>
+                <option value="hourly" <?php selected($fetch_frequency, 'hourly'); ?>>Hourly</option>
+            </select>
+            <?php submit_button('Set Frequency'); ?>
+        </form>
+
+        <h3>Devices</h3>
+        <table class="form-table">
+            <?php foreach ($devices as $index => $device) : ?>
+                <tr valign="top">
+                    <td><?php echo esc_html($device['endpoint']); ?></td>
+                    <td>
+                        <form method="post" action="">
+                            <input type="hidden" name="delete_device_index" value="<?php echo $index; ?>" />
+                            <?php submit_button('Delete', 'delete small', 'submit', false); ?>
+                        </form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </table>
+
+        <h3>Add New Device</h3>
         <form method="post" action="">
             <table class="form-table">
                 <tr valign="top">
-                    <th scope="row">Tuya API Endpoint</th>
-                    <td><input type="text" name="tuya_endpoint" value="<?php echo esc_attr($tuya_endpoint); ?>" class="regular-text" /></td>
+                    <th scope="row">Tuya Device API Endpoint</th>
+                    <td><input type="text" name="tuya_new_device_endpoint" value="" class="regular-text" /></td>
                 </tr>
                 <tr valign="top">
-                    <th scope="row">Tuya Access Token</th>
-                    <td><input type="text" name="tuya_token" value="<?php echo esc_attr($tuya_token); ?>" class="regular-text" /></td>
+                    <th scope="row">Tuya Device Access Token</th>
+                    <td><input type="text" name="tuya_new_device_token" value="" class="regular-text" /></td>
                 </tr>
             </table>
-            <?php submit_button(); ?>
+            <?php submit_button('Add Device'); ?>
         </form>
     </div>
     <?php
 }
 
-// 从Tuya获取数据并发布到WordPress的功能
-function fetch_tuya_and_post() {
-    $tuya_endpoint = get_option('tuya_endpoint', '');
-    $tuya_token = get_option('tuya_token', '');
-
-    $headers = array(
-        'Authorization' => 'Bearer ' . $tuya_token
-        // 其他需要的头部信息
-    );
-
-    $response = wp_remote_get($tuya_endpoint, array('headers' => $headers));
-    if (is_wp_error($response)) {
-        return;
+// 从Tuya获取数据并更新指定的WordPress文章
+function fetch_tuya_and_update_post() {
+    $devices = get_option('tuya_devices', array());
+    $target_post_id = get_option('tuya_target_post_id', 0);
+    if (!$target_post_id) {
+        return;  // No target post set
     }
 
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
+    foreach ($devices as $device) {
+        $headers = array('Authorization' => 'Bearer ' . $device['token']);
+        $response = wp_remote_get($device['endpoint'], array('headers' => $headers));
+        if (is_wp_error($response)) {
+            continue;
+        }
 
-    $co2_concentration = $data['result'][0]['value'];  // 假设这是二氧化碳浓度的字段
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        $co2_concentration = $data['result'][0]['value'];  // Assuming this is the CO2 concentration field
 
-    $post_data = array(
-        'post_title'   => 'CO2 Concentration Report',
-        'post_content' => "Current CO2 concentration is {$co2_concentration} ppm",
-        'post_status'  => 'publish',
-    );
-
-    wp_insert_post($post_data);
+        // Update the specified post with the new data
+        wp_update_post(array(
+            'ID' => $target_post_id,
+            'post_content' => "Current CO2 concentration is {$co2_concentration} ppm"
+        ));
+    }
 }
 
 // 定时任务
-if (!wp_next_scheduled('fetch_tuya_and_post')) {
-    wp_schedule_event(time(), 'hourly', 'fetch_tuya_and_post');
+$fetch_frequency = get_option('tuya_fetch_frequency', 'hourly');
+if (!wp_next_scheduled('fetch_tuya_and_update_post')) {
+    wp_schedule_event(time(), $fetch_frequency, 'fetch_tuya_and_update_post');
 }
 
-add_action('fetch_tuya_and_post', 'fetch_tuya_and_post');
+add_action('fetch_tuya_and_update_post', 'fetch_tuya_and_update_post');
 ?>
