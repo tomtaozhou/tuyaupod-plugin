@@ -67,6 +67,22 @@ function tuya_to_post_settings_page() {
         wp_schedule_event(time(), $_POST['fetch_frequency'], 'fetch_tuya_and_update_post');
     }
 
+    // Handle editing a device
+    if (isset($_POST['edit_device_index'])) {
+        $devices = get_option('tuya_devices', array());
+        $edit_device = $devices[intval($_POST['edit_device_index'])];
+    }
+
+    // Handle saving edits to a device
+    if (isset($_POST['save_device_index'])) {
+        $devices = get_option('tuya_devices', array());
+        $devices[intval($_POST['save_device_index'])] = array(
+            'endpoint' => $_POST['tuya_edit_device_endpoint'],
+            'token' => $_POST['tuya_edit_device_token']
+        );
+        update_option('tuya_devices', $devices);
+    }
+
     $devices = get_option('tuya_devices', array());
     $target_post_id = get_option('tuya_target_post_id', 0);
     $fetch_frequency = get_option('tuya_fetch_frequency', 'hourly');
@@ -77,7 +93,18 @@ function tuya_to_post_settings_page() {
         <h3>Target Post</h3>
         <form method="post" action="">
             <label for="target_post_id">Post to update with CO2 data:</label>
-            <?php wp_dropdown_pages(array('name' => 'target_post_id', 'selected' => $target_post_id)); ?>
+            <select name="target_post_id">
+                <?php
+                $args = array(
+                    'post_type' => 'post',
+                    'posts_per_page' => -1
+                );
+                $query = new WP_Query($args);
+                while ($query->have_posts()) : $query->the_post();
+                ?>
+                    <option value="<?php the_ID(); ?>" <?php selected($target_post_id, get_the_ID()); ?>><?php the_title(); ?></option>
+                <?php endwhile; wp_reset_postdata(); ?>
+            </select>
             <?php submit_button('Set Target Post'); ?>
         </form>
 
@@ -92,13 +119,35 @@ function tuya_to_post_settings_page() {
             <?php submit_button('Set Frequency'); ?>
         </form>
 
+        <?php if (isset($edit_device)) : ?>
+            <h3>Edit Device</h3>
+            <form method="post" action="">
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">Tuya Device API Endpoint</th>
+                        <td><input type="text" name="tuya_edit_device_endpoint" value="<?php echo esc_attr($edit_device['endpoint']); ?>" class="regular-text" /></td>
+                    </tr>
+                    <tr valign="top">
+                        <th scope="row">Tuya Device Access Token</th>
+                        <td><input type="text" name="tuya_edit_device_token" value="<?php echo esc_attr($edit_device['token']); ?>" class="regular-text" /></td>
+                    </tr>
+                </table>
+                <input type="hidden" name="save_device_index" value="<?php echo esc_attr($_POST['edit_device_index']); ?>" />
+                <?php submit_button('Save Changes'); ?>
+            </form>
+        <?php endif; ?>
+
         <h3>Devices</h3>
         <table class="form-table">
             <?php foreach ($devices as $index => $device) : ?>
                 <tr valign="top">
                     <td><?php echo esc_html($device['endpoint']); ?></td>
                     <td>
-                        <form method="post" action="">
+                        <form method="post" action="" style="display:inline-block;">
+                            <input type="hidden" name="edit_device_index" value="<?php echo $index; ?>" />
+                            <?php submit_button('Edit', 'primary small', 'submit', false); ?>
+                        </form>
+                        <form method="post" action="" style="display:inline-block;">
                             <input type="hidden" name="delete_device_index" value="<?php echo $index; ?>" />
                             <?php submit_button('Delete', 'delete small', 'submit', false); ?>
                         </form>
