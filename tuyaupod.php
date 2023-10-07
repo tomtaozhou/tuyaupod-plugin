@@ -1,9 +1,9 @@
 <?php
 /*
-Plugin Name: Tuya CO2 to Post
-Description: Fetch CO2 data from Tuya devices and post it to a specified WordPress post.
+Plugin Name: Tuya to UPOD Post
+Description: Fetch data from Tuya devices and post it to a specified UPOD post.
 Version: 1.0
-Author: Your Name
+Author: Tao Zhou
 */
 
 // 创建自定义时间间隔
