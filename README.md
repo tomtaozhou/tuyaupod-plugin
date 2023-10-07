@@ -2,7 +2,6 @@
 
 This WordPress plugin fetches data from Tuya smart devices and updates a specified post within your UPOD WordPress website.
 
-![Plugin Screenshot](path_to_screenshot.png) <!-- Replace with an actual screenshot if you have one -->
 
 ## Features:
 
